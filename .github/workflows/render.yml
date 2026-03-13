@@ -10,51 +10,75 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+
+      - name: checkout repo
+        uses: actions/checkout@v4
 
       - name: read topic
         run: |
           TOPIC=$(cat topic.txt)
           echo "TOPIC=$TOPIC" >> $GITHUB_ENV
+          echo "Topic is $TOPIC"
 
       - name: install tools
         run: |
           sudo apt update
-          sudo apt install ffmpeg jq curl -y
+          sudo apt install ffmpeg jq curl wget -y
 
-      - name: try pixabay
+      - name: get video from pixabay
         run: |
+          echo "Trying Pixabay..."
           URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
           curl -s "$URL" > pixabay.json
           VIDEO=$(jq -r '.hits[0].videos.medium.url' pixabay.json)
-          if [ "$VIDEO" != "null" ]; then
+
+          if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
             wget "$VIDEO" -O video.mp4
           fi
 
-      - name: try pexels if pixabay failed
+      - name: get video from pexels if pixabay failed
         run: |
           if [ ! -f video.mp4 ]; then
+            echo "Trying Pexels..."
             curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
             "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
+
             VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
-            wget "$VIDEO" -O video.mp4
+
+            if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
+              wget "$VIDEO" -O video.mp4
+            fi
           fi
 
-      - name: try nasa if others fail
+      - name: fallback nasa image
         run: |
           if [ ! -f video.mp4 ]; then
+            echo "Using NASA image fallback..."
             curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
             IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
+
             wget "$IMG" -O image.jpg
+
             ffmpeg -loop 1 -i image.jpg -t 30 -vf scale=1280:720 video.mp4
           fi
 
       - name: render video
         run: |
-          ffmpeg -stream_loop 15 -i video.mp4 -t 600 -c copy output.mp4
+          echo "Rendering video..."
+          ffmpeg -stream_loop 20 -i video.mp4 -t 600 -c copy output.mp4
 
-      - name: upload result
-        uses: actions/upload-artifact@v3
+      - name: create thumbnail
+        run: |
+          ffmpeg -i output.mp4 -ss 00:00:05 -vframes 1 thumb.jpg
+
+      - name: upload video
+        uses: actions/upload-artifact@v4
         with:
           name: rendered-video
           path: output.mp4
+
+      - name: upload thumbnail
+        uses: actions/upload-artifact@v4
+        with:
+          name: thumbnail
+          path: thumb.jpg
