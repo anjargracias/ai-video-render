@@ -9,77 +9,64 @@ jobs:
   render:
     runs-on: ubuntu-latest
 
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
     steps:
+      - uses: actions/checkout@v4
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Read topic
+      - name: read topic
         run: |
           TOPIC=$(cat topic.txt)
+          echo "TOPIC=$TOPIC" >> $GITHUB_ENV
           echo "Topic: $TOPIC"
 
-      - name: Install tools
+      - name: install tools
         run: |
           sudo apt update
           sudo apt install ffmpeg jq curl wget -y
 
-      - name: Try Pixabay
+      - name: download multiple videos
         run: |
-          URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
-          curl -s "$URL" > pixabay.json
-          VIDEO=$(jq -r '.hits[0].videos.medium.url // empty' pixabay.json)
-          if [ -n "$VIDEO" ]; then
-            wget "$VIDEO" -O video.mp4
-          fi
-
-      - name: Try Pexels
-        run: |
-          if [ ! -f video.mp4 ]; then
-            curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
-            "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
-            VIDEO=$(jq -r '.videos[0].video_files[0].link // empty' pexels.json)
-            if [ -n "$VIDEO" ]; then
-              wget "$VIDEO" -O video.mp4
+          mkdir -p clips
+          COUNT=0
+          while [ $COUNT -lt 10 ]; do
+            # Coba Pixabay dulu
+            URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
+            curl -s "$URL" > result.json
+            VIDEO=$(jq -r ".hits[$RANDOM % (.hits|length)].videos.medium.url" result.json)
+            
+            # Kalau ada link
+            if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
+              FILE="clips/clip_$COUNT.mp4"
+              wget -q "$VIDEO" -O "$FILE"
+              COUNT=$((COUNT+1))
             fi
-          fi
+          done
 
-      - name: Try NASA (image to video)
+      - name: cut random segments
         run: |
-          if [ ! -f video.mp4 ]; then
-            curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
-            IMG=$(jq -r '.collection.items[0].links[0].href // empty' nasa.json)
-            if [ -n "$IMG" ]; then
-              wget "$IMG" -O image.jpg
-              ffmpeg -loop 1 -i image.jpg -t 30 -vf scale=1280:720 video.mp4
-            fi
-          fi
+          mkdir -p segments
+          for f in clips/*.mp4; do
+            DURATION=$((5 + RANDOM % 3)) # 5-7 detik
+            ffmpeg -y -i "$f" -ss 0 -t $DURATION -c copy "segments/$(basename $f)"
+          done
 
-      - name: Try Openverse
+      - name: concatenate segments
         run: |
-          if [ ! -f video.mp4 ]; then
-            curl -s "https://api.openverse.engineering/v1/images?q=$TOPIC&type=image" > openverse.json
-            IMG=$(jq -r '.results[0].url // empty' openverse.json)
-            if [ -n "$IMG" ]; then
-              wget "$IMG" -O image.jpg
-              ffmpeg -loop 1 -i image.jpg -t 30 -vf scale=1280:720 video.mp4
-            fi
-          fi
+          # buat file daftar segmen
+          ls segments/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
+          ffmpeg -y -f concat -safe 0 -i segments.txt -c copy output.mp4
 
-      - name: Render video
+      - name: create thumbnail
         run: |
-          if [ -f video.mp4 ]; then
-            ffmpeg -stream_loop 20 -i video.mp4 -t 120 -c copy output.mp4
-          else
-            echo "No video found for topic: $TOPIC, skipping render."
-          fi
+          ffmpeg -i output.mp4 -ss 00:00:05 -vframes 1 thumb.jpg
 
-      - name: Upload video
-        if: always()
+      - name: upload video
         uses: actions/upload-artifact@v4
         with:
           name: rendered-video
           path: output.mp4
+
+      - name: upload thumbnail
+        uses: actions/upload-artifact@v4
+        with:
+          name: thumbnail
+          path: thumb.jpg
