@@ -11,42 +11,49 @@ jobs:
 
     steps:
 
-      - name: checkout repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: read topic
+      - name: Read topic
         run: |
           TOPIC=$(cat topic.txt)
           echo "TOPIC=$TOPIC" >> $GITHUB_ENV
           echo "Topic: $TOPIC"
 
-      - name: install tools
+      - name: Install tools
         run: |
           sudo apt update
           sudo apt install ffmpeg jq curl wget -y
 
-      - name: download from pixabay
+      - name: Get video from Pixabay
         run: |
+          echo "Searching video from Pixabay..."
+
           URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
           curl -s "$URL" > pixabay.json
-          VIDEO=$(jq -r '.hits[0].videos.medium.url' pixabay.json)
 
-          if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
+          VIDEO=$(jq -r '.hits[0].videos.medium.url // empty' pixabay.json)
+
+          echo "Video URL: $VIDEO"
+
+          if [ -n "$VIDEO" ]; then
             wget "$VIDEO" -O video.mp4
+          else
+            echo "No video found on Pixabay"
           fi
 
-      - name: fallback video
+      - name: Fallback sample video
         run: |
           if [ ! -f video.mp4 ]; then
-            echo "No video found, downloading sample"
+            echo "Using fallback sample video"
             wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O video.mp4
           fi
 
-      - name: render video
+      - name: Render video
         run: |
           ffmpeg -stream_loop 20 -i video.mp4 -t 120 -c copy output.mp4
 
-      - name: upload result
+      - name: Upload result
         uses: actions/upload-artifact@v4
         with:
           name: rendered-video
