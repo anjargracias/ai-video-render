@@ -1,0 +1,35 @@
+name: render-video
+
+on:
+  push:
+    paths:
+      - 'topic.txt'
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: read topic
+        run: |
+          echo "TOPIC:"
+          cat topic.txt
+
+      - name: install ffmpeg
+        run: sudo apt update && sudo apt install ffmpeg -y
+
+      - name: download sample video
+        run: |
+          wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O video.mp4
+
+      - name: render video
+        run: |
+          ffmpeg -stream_loop 20 -i video.mp4 -t 300 -c copy output.mp4
+
+      - name: upload result
+        uses: actions/upload-artifact@v3
+        with:
+          name: rendered-video
+          path: output.mp4
