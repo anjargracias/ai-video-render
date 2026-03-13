@@ -11,7 +11,7 @@ jobs:
 
     steps:
 
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Read topic
@@ -25,32 +25,31 @@ jobs:
           sudo apt update
           sudo apt install ffmpeg jq curl wget -y
 
-      - name: Get video from Pixabay
+      - name: Try Pixabay
         run: |
-          echo "Searching video from Pixabay..."
+          echo "Searching Pixabay..."
 
           URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
           curl -s "$URL" > pixabay.json
 
           VIDEO=$(jq -r '.hits[0].videos.medium.url // empty' pixabay.json)
 
-          echo "Video URL: $VIDEO"
+          echo "Pixabay result: $VIDEO"
 
           if [ -n "$VIDEO" ]; then
-            wget "$VIDEO" -O video.mp4
-          else
-            echo "No video found on Pixabay"
+            wget "$VIDEO" -O video.mp4 || true
           fi
 
-      - name: Fallback sample video
+      - name: Fallback video
         run: |
           if [ ! -f video.mp4 ]; then
-            echo "Using fallback sample video"
+            echo "Pixabay failed, using fallback video"
             wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O video.mp4
           fi
 
       - name: Render video
         run: |
+          echo "Rendering video..."
           ffmpeg -stream_loop 20 -i video.mp4 -t 120 -c copy output.mp4
 
       - name: Upload result
