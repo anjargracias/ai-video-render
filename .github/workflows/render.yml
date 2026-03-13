@@ -27,33 +27,58 @@ jobs:
           sudo apt update
           sudo apt install ffmpeg jq curl wget -y
 
-      - name: Try download from Pixabay
+      - name: Try Pixabay
         run: |
-          set +e
-          TOPIC=$(cat topic.txt)
-
           URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
           curl -s "$URL" > pixabay.json
-
           VIDEO=$(jq -r '.hits[0].videos.medium.url // empty' pixabay.json)
-
-          if [ ! -z "$VIDEO" ]; then
-            echo "Downloading Pixabay video"
+          if [ -n "$VIDEO" ]; then
             wget "$VIDEO" -O video.mp4
           fi
 
-      - name: Fallback sample video
+      - name: Try Pexels
         run: |
           if [ ! -f video.mp4 ]; then
-            echo "Using fallback sample video"
-            wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O video.mp4
+            curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
+            "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
+            VIDEO=$(jq -r '.videos[0].video_files[0].link // empty' pexels.json)
+            if [ -n "$VIDEO" ]; then
+              wget "$VIDEO" -O video.mp4
+            fi
+          fi
+
+      - name: Try NASA (image to video)
+        run: |
+          if [ ! -f video.mp4 ]; then
+            curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
+            IMG=$(jq -r '.collection.items[0].links[0].href // empty' nasa.json)
+            if [ -n "$IMG" ]; then
+              wget "$IMG" -O image.jpg
+              ffmpeg -loop 1 -i image.jpg -t 30 -vf scale=1280:720 video.mp4
+            fi
+          fi
+
+      - name: Try Openverse
+        run: |
+          if [ ! -f video.mp4 ]; then
+            curl -s "https://api.openverse.engineering/v1/images?q=$TOPIC&type=image" > openverse.json
+            IMG=$(jq -r '.results[0].url // empty' openverse.json)
+            if [ -n "$IMG" ]; then
+              wget "$IMG" -O image.jpg
+              ffmpeg -loop 1 -i image.jpg -t 30 -vf scale=1280:720 video.mp4
+            fi
           fi
 
       - name: Render video
         run: |
-          ffmpeg -stream_loop 20 -i video.mp4 -t 120 -c copy output.mp4
+          if [ -f video.mp4 ]; then
+            ffmpeg -stream_loop 20 -i video.mp4 -t 120 -c copy output.mp4
+          else
+            echo "No video found for topic: $TOPIC, skipping render."
+          fi
 
       - name: Upload video
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rendered-video
