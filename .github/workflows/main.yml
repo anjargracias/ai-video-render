@@ -1,61 +1,67 @@
 name: render-video-final
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   render:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up FFmpeg
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y ffmpeg wget
+          sudo apt install -y ffmpeg jq wget
 
-      - name: Debug workspace
+      - name: Set topic
         run: |
-          echo "Workspace: $GITHUB_WORKSPACE"
-          ls -la $GITHUB_WORKSPACE
+          TOPIC=$(cat topic.txt)
+          echo "Topic: $TOPIC"
 
-      - name: Create clips directory
-        run: mkdir -p $GITHUB_WORKSPACE/clips
-
-      - name: Download multiple sample videos
+      - name: Download and process clips
         run: |
-          cd $GITHUB_WORKSPACE/clips
-          for i in {1..10}; do
-            wget -q --show-progress https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O clip_$i.mp4 || echo "Download $i failed"
+          mkdir -p clips
+          COUNT=0
+          TARGET=$((10 + RANDOM % 6))
+          while [ $COUNT -lt $TARGET ]; do
+            VIDEO=""
+            # Pixabay
+            URL="https://pixabay.com/api/videos/?key=YOUR_KEY&q=$TOPIC"
+            curl -s "$URL" > pixabay.json
+            LENGTH=$(jq '.hits | length' pixabay.json)
+            if [ "$LENGTH" -gt 0 ]; then
+              INDEX=$((RANDOM % LENGTH))
+              VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json)
+            fi
+            # fallback Pexels
+            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+              curl -H "Authorization: YOUR_PEXELS_KEY" \
+                "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
+              VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
+            fi
+            # fallback NASA image
+            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+              curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
+              IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
+              if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
+                FILE="clips/clip_$COUNT.mp4"
+                wget -q "$IMG" -O image.jpg
+                ffmpeg -y -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
+                COUNT=$((COUNT+1))
+                continue
+              fi
+            fi
+            # download video jika ada
+            if [ -n "$VIDEO" ] && [ "$VIDEO" != "null" ]; then
+              FILE="clips/clip_$COUNT.mp4"
+              wget -q "$VIDEO" -O "$FILE"
+              if [ -s "$FILE" ]; then
+                COUNT=$((COUNT+1))
+              fi
+            fi
           done
-
-      - name: Cut random 5-7s segments
-        run: |
-          cd $GITHUB_WORKSPACE/clips
-          mkdir -p segments
-          for f in clip_*.mp4; do
-            # random start 0-3s
-            start=$((RANDOM % 3))
-            duration=$((5 + RANDOM % 3))
-            ffmpeg -ss $start -i "$f" -t $duration -c copy "segments/segment_$f" -y
-          done
-
-      - name: Concatenate segments
-        run: |
-          cd $GITHUB_WORKSPACE/clips
-          ls segments/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
-          ffmpeg -f concat -safe 0 -i segments.txt -c copy "$GITHUB_WORKSPACE/output.mp4" -y
-
-      - name: Create thumbnail
-        run: |
-          ffmpeg -i "$GITHUB_WORKSPACE/output.mp4" -ss 00:00:01 -vframes 1 "$GITHUB_WORKSPACE/thumb.jpg" -y
-
-      - name: Upload video
-        uses: actions/upload-artifact@v4
-        with:
-          name: rendered-video
-          path: |
-            $GITHUB_WORKSPACE/output.mp4
-            $GITHUB_WORKSPACE/thumb.jpg
