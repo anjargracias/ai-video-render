@@ -8,13 +8,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Ambil kode dari repo
       - uses: actions/checkout@v3
 
-      - name: install ffmpeg
-        run: sudo apt update && sudo apt install ffmpeg -y
+      # Install FFmpeg
+      - name: Install FFmpeg
+        run: |
+          sudo apt update
+          sudo apt install ffmpeg -y
 
-      - name: download sample video
+      # Download sample video
+      - name: Download sample video
         run: wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O video.mp4
 
-      - name: render video
-        run: ffmpeg -stream_loop 10 -i video.mp4 -t 300 -c copy output.mp4
+      # Buat folder output
+      - name: Prepare output folder
+        run: mkdir -p output
+
+      # Render video
+      - name: Render video (loop & extend)
+        run: |
+          ffmpeg -stream_loop 10 -i video.mp4 -t 300 -c copy output/output.mp4
+
+      # Upload hasil render
+      - name: Upload Render Output
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-video
+          path: output/output.mp4
