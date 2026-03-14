@@ -1,50 +1,98 @@
-- name: Download multiple videos
-  run: |
-    mkdir -p clips
-    COUNT=0
-    TARGET=$((10 + RANDOM % 6))
-    while [ $COUNT -lt $TARGET ]; do
-      VIDEO=""
+name: render-video-final
 
-      # Pixabay
-      URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
-      curl -s "$URL" > pixabay.json
-      LENGTH=$(jq '.hits | length' pixabay.json)
-      if [ "$LENGTH" -gt 0 ]; then
-        INDEX=$((RANDOM % LENGTH))
-        VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json)
-      fi
+on:
+  workflow_dispatch:
 
-      # Fallback Pexels
-      if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
-        curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
-        "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
-        VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
-      fi
+jobs:
+  render:
+    runs-on: ubuntu-latest
 
-      # Fallback NASA image
-      if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
-        curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
-        IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
-        if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
-          FILE="clips/clip_$COUNT.mp4"
-          wget -q "$IMG" -O image.jpg
-          ffmpeg -y -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
-          COUNT=$((COUNT+1))
-          echo "Downloaded NASA image as clip_$COUNT.mp4"
-          continue
-        fi
-      fi
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Download video jika ada
-      if [ -n "$VIDEO" ] && [ "$VIDEO" != "null" ]; then
-        FILE="clips/clip_$COUNT.mp4"
-        wget -q "$VIDEO" -O "$FILE"
-        if [ -s "$FILE" ]; then
-          COUNT=$((COUNT+1))
-          echo "Downloaded video as clip_$COUNT.mp4"
-        else
-          echo "Video download failed, skipping..."
-        fi
-      fi
-    done
+      - name: Install required tools
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg jq wget imagemagick
+
+      - name: Prepare clips folder
+        run: mkdir -p clips
+
+      - name: Read topic
+        id: topic
+        run: |
+          if [ -f topic.txt ]; then
+            echo "TOPIC=$(cat topic.txt)" >> $GITHUB_ENV
+          else
+            echo "TOPIC=forest birds nature" >> $GITHUB_ENV
+          fi
+
+      - name: Download videos and images
+        run: |
+          COUNT=0
+          TARGET=$((10 + RANDOM % 6))
+          while [ $COUNT -lt $TARGET ]; do
+            VIDEO=""
+            URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
+            curl -s "$URL" > pixabay.json
+            LENGTH=$(jq '.hits | length' pixabay.json)
+            if [ "$LENGTH" -gt 0 ]; then
+              INDEX=$((RANDOM % LENGTH))
+              VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json)
+            fi
+
+            # fallback Pexels
+            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+              curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
+              "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
+              VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
+            fi
+
+            # fallback NASA image
+            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+              curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
+              IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
+              if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
+                FILE="clips/clip_$COUNT.mp4"
+                wget -q "$IMG" -O image.jpg
+                ffmpeg -y -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
+                COUNT=$((COUNT+1))
+                continue
+              fi
+            fi
+
+            # download video jika ada
+            if [ -n "$VIDEO" ] && [ "$VIDEO" != "null" ]; then
+              FILE="clips/clip_$COUNT.mp4"
+              wget -q "$VIDEO" -O "$FILE"
+              if [ -s "$FILE" ]; then
+                COUNT=$((COUNT+1))
+              fi
+            fi
+          done
+
+      - name: Cut random segments 5-7s
+        run: |
+          mkdir -p segments
+          for f in clips/*.mp4; do
+            DURATION=$(ffprobe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "$f")
+            START=$(awk -v d=$DURATION 'BEGIN{s=int(rand()*(d-7)); if(s<0)s=0; print s}')
+            ffmpeg -y -ss $START -i "$f" -t $((5 + RANDOM % 3)) -c copy "segments/$(basename "$f")"
+          done
+
+      - name: Concatenate segments
+        run: |
+          ls segments/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
+          ffmpeg -y -f concat -safe 0 -i segments.txt -c copy output.mp4
+
+      - name: Create thumbnail
+        run: ffmpeg -y -i output.mp4 -ss 00:00:01 -vframes 1 thumb.jpg
+
+      - name: Upload video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: |
+            output.mp4
+            thumb.jpg
