@@ -1,4 +1,4 @@
-name: render-video
+name: multi-clip-render
 
 on:
   workflow_dispatch:
@@ -8,34 +8,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
       - uses: actions/checkout@v3
 
-      # 2️⃣ Install FFmpeg
-      - name: Install FFmpeg
-        run: sudo apt update && sudo apt install ffmpeg -y
+      - name: Install FFmpeg and tools
+        run: sudo apt update && sudo apt install -y ffmpeg imagemagick wget
 
-      # 3️⃣ Download sample video (opsional, bisa dihapus kalau pakai video sendiri)
-      - name: Download sample video
+      - name: Prepare clips folder
+        run: mkdir -p clips segments
+
+      - name: Download sample videos
         run: |
-          mkdir -p segments
-          wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O segments/video1.mp4
-          cp segments/video1.mp4 segments/video2.mp4
-          cp segments/video1.mp4 segments/video3.mp4
+          for i in {1..10}; do
+            wget -q https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O clips/video$i.mp4
+          done
 
-      # 4️⃣ Generate segments.txt untuk concat
-      - name: Create segments list
+      - name: Cut random 5-7s segments
+        run: |
+          rm -f segments/*.mp4
+          for file in clips/*.mp4; do
+            DURATION=$((5 + RANDOM % 3))
+            ffmpeg -y -ss 0 -t $DURATION -i "$file" -c copy "segments/$(basename "$file")"
+          done
+
+      - name: Create segments.txt for concat
         run: |
           ls segments/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
           cat segments.txt
 
-      # 5️⃣ Render / gabungkan video dengan FFmpeg
-      - name: Render video
+      - name: Concatenate segments
         run: |
-          # Gunakan re-encode agar aman jika codec berbeda
           ffmpeg -f concat -safe 0 -i segments.txt -c:v libx264 -crf 23 -preset veryfast -c:a aac output.mp4
 
-      # 6️⃣ Cek hasil output
-      - name: List output
-        run: ls -lh output.mp4          name: rendered-video
-          path: output/output.mp4
+      - name: Generate thumbnail
+        run: ffmpeg -i output.mp4 -ss 00:00:01 -vframes 1 thumbnail.png
+
+      - name: List output files
+        run: ls -lh output.mp4 thumbnail.png
