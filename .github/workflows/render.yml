@@ -1,4 +1,4 @@
-name: render-video-strong
+name: render-video-stable
 
 on:
   push:
@@ -29,8 +29,9 @@ jobs:
         run: |
           mkdir -p clips
           COUNT=0
-          TARGET=$((10 + RANDOM % 6))  # 10-15 video
+          TARGET=$((10 + RANDOM % 6))
           while [ $COUNT -lt $TARGET ]; do
+            VIDEO=""
             # Pixabay
             URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
             curl -s "$URL" > pixabay.json
@@ -40,32 +41,37 @@ jobs:
               VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json)
             fi
 
-            if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
-              FILE="clips/clip_$COUNT.mp4"
-              wget -q "$VIDEO" -O "$FILE"
-              COUNT=$((COUNT+1))
-              continue
-            fi
-
             # fallback Pexels
-            curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
-            "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
-            VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
-            if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
-              FILE="clips/clip_$COUNT.mp4"
-              wget -q "$VIDEO" -O "$FILE"
-              COUNT=$((COUNT+1))
-              continue
+            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+              curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
+              "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
+              VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
             fi
 
             # fallback NASA image
-            curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
-            IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
-            if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
+            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+              curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
+              IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
+              if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
+                FILE="clips/clip_$COUNT.mp4"
+                wget -q "$IMG" -O image.jpg
+                ffmpeg -y -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
+                COUNT=$((COUNT+1))
+                echo "Downloaded NASA image as clip_$COUNT.mp4"
+                continue
+              fi
+            fi
+
+            # download video jika ada
+            if [ -n "$VIDEO" ] && [ "$VIDEO" != "null" ]; then
               FILE="clips/clip_$COUNT.mp4"
-              wget -q "$IMG" -O image.jpg
-              ffmpeg -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
-              COUNT=$((COUNT+1))
+              wget -q "$VIDEO" -O "$FILE"
+              if [ -s "$FILE" ]; then
+                COUNT=$((COUNT+1))
+                echo "Downloaded video as clip_$COUNT.mp4"
+              else
+                echo "Video download failed, skipping..."
+              fi
             fi
           done
 
