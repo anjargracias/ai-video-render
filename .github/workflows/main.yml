@@ -8,31 +8,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Ambil kode dari repo
+      # 1️⃣ Checkout repository
       - uses: actions/checkout@v3
 
-      # Install FFmpeg
+      # 2️⃣ Install FFmpeg
       - name: Install FFmpeg
-        run: |
-          sudo apt update
-          sudo apt install ffmpeg -y
+        run: sudo apt update && sudo apt install ffmpeg -y
 
-      # Download sample video
+      # 3️⃣ Download sample video (opsional, bisa dihapus kalau pakai video sendiri)
       - name: Download sample video
-        run: wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O video.mp4
-
-      # Buat folder output
-      - name: Prepare output folder
-        run: mkdir -p output
-
-      # Render video
-      - name: Render video (loop & extend)
         run: |
-          ffmpeg -stream_loop 10 -i video.mp4 -t 300 -c copy output/output.mp4
+          mkdir -p segments
+          wget https://samplelib.com/lib/preview/mp4/sample-5s.mp4 -O segments/video1.mp4
+          cp segments/video1.mp4 segments/video2.mp4
+          cp segments/video1.mp4 segments/video3.mp4
 
-      # Upload hasil render
-      - name: Upload Render Output
-        uses: actions/upload-artifact@v4
-        with:
-          name: rendered-video
+      # 4️⃣ Generate segments.txt untuk concat
+      - name: Create segments list
+        run: |
+          ls segments/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
+          cat segments.txt
+
+      # 5️⃣ Render / gabungkan video dengan FFmpeg
+      - name: Render video
+        run: |
+          # Gunakan re-encode agar aman jika codec berbeda
+          ffmpeg -f concat -safe 0 -i segments.txt -c:v libx264 -crf 23 -preset veryfast -c:a aac output.mp4
+
+      # 6️⃣ Cek hasil output
+      - name: List output
+        run: ls -lh output.mp4          name: rendered-video
           path: output/output.mp4
