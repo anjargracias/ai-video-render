@@ -1,115 +1,121 @@
-name: render-video-final
+name: render-video-final-advanced
 
 on:
-  push:
-    paths:
-      - 'topic.txt'
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Topic for video clips'
+        required: true
+        default: 'forest birds nature'
 
 jobs:
   render:
     runs-on: ubuntu-latest
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      MAX_RETRIES: 3
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: read topic
-        run: |
-          TOPIC=$(cat topic.txt)
-          echo "TOPIC=$TOPIC" >> $GITHUB_ENV
-          echo "Topic: $TOPIC"
-
-      - name: install tools
+      - name: Install tools
         run: |
           sudo apt update
-          sudo apt install ffmpeg jq curl wget -y
+          sudo apt install -y ffmpeg jq wget
 
-      - name: download multiple videos (10-15 clips)
+      - name: Download clips with retry & log
         run: |
-          mkdir -p clips
+          set -euo pipefail
+          mkdir -p clips log
           COUNT=0
           TARGET=$((10 + RANDOM % 6))
+          TOPIC="${{ github.event.inputs.topic }}"
+          QUERY=$(echo "$TOPIC" | sed 's/ /%20/g')
+
           while [ $COUNT -lt $TARGET ]; do
-            VIDEO=""
-            # Pixabay
-            URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
-            curl -s "$URL" > pixabay.json
-            LENGTH=$(jq '.hits | length' pixabay.json)
-            if [ "$LENGTH" -gt 0 ]; then
-              INDEX=$((RANDOM % LENGTH))
-              VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json)
-            fi
+            RETRY=0
+            SUCCESS=0
+            while [ $RETRY -lt $MAX_RETRIES ] && [ $SUCCESS -eq 0 ]; do
+              VIDEO=""
+              PIX_URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$QUERY"
+              curl -s "$PIX_URL" > pixabay.json || true
+              LENGTH=$(jq '.hits | length' pixabay.json || echo 0)
+              if [ "$LENGTH" -gt 0 ]; then
+                INDEX=$((RANDOM % LENGTH))
+                VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json || echo "")
+              fi
 
-            # fallback Pexels
-            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
-              curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
-              "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
-              VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
-            fi
+              if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+                PEX_KEY="XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY"
+                curl -s -H "Authorization: $PEX_KEY" \
+                  "https://api.pexels.com/videos/search?query=$QUERY&per_page=1" > pexels.json || true
+                VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json || echo "")
+              fi
 
-            # fallback NASA image
-            if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
-              curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
-              IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
-              if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
+              if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
+                curl -s "https://images-api.nasa.gov/search?q=$QUERY&media_type=image" > nasa.json || true
+                IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json || echo "")
+                if [ -n "$IMG" ] && [ "$IMG" != "null" ]; then
+                  FILE="clips/clip_$COUNT.mp4"
+                  wget -q "$IMG" -O image.jpg || { RETRY=$((RETRY+1)); continue; }
+                  ffmpeg -y -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
+                  echo "$(date) - NASA image as clip_$COUNT.mp4" >> log/download.log
+                  COUNT=$((COUNT+1))
+                  SUCCESS=1
+                  break
+                fi
+              fi
+
+              if [ -n "$VIDEO" ] && [ "$VIDEO" != "null" ]; then
                 FILE="clips/clip_$COUNT.mp4"
-                wget -q "$IMG" -O image.jpg
-                ffmpeg -y -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
-                COUNT=$((COUNT+1))
-                echo "Downloaded NASA image as clip_$COUNT.mp4"
-                continue
+                wget -q "$VIDEO" -O "$FILE" || { RETRY=$((RETRY+1)); continue; }
+                if [ -s "$FILE" ]; then
+                  echo "$(date) - Video downloaded as clip_$COUNT.mp4" >> log/download.log
+                  COUNT=$((COUNT+1))
+                  SUCCESS=1
+                  break
+                fi
               fi
-            fi
 
-            # download video jika ada
-            if [ -n "$VIDEO" ] && [ "$VIDEO" != "null" ]; then
-              FILE="clips/clip_$COUNT.mp4"
-              wget -q "$VIDEO" -O "$FILE"
-              if [ -s "$FILE" ]; then
-                COUNT=$((COUNT+1))
-                echo "Downloaded video as clip_$COUNT.mp4"
-              else
-                echo "Video download failed, skipping..."
-              fi
+              RETRY=$((RETRY+1))
+            done
+
+            if [ $SUCCESS -eq 0 ]; then
+              echo "$(date) - Failed to download clip $COUNT, skipping" >> log/download.log
+              COUNT=$((COUNT+1))
             fi
           done
 
-      - name: check clips
-        run: |
-          COUNT=$(ls clips/*.mp4 2>/dev/null | wc -l)
-          if [ "$COUNT" -lt 1 ]; then
-            echo "No clips downloaded. Exiting workflow."
-            exit 0
-          else
-            echo "$COUNT clips downloaded, proceeding..."
-          fi
-
-      - name: cut random segments 5-7s
+      - name: Cut random segments safely
         run: |
           mkdir -p segments
           for f in clips/*.mp4; do
-            DURATION=$((5 + RANDOM % 3))
-            ffmpeg -y -i "$f" -ss 0 -t $DURATION -c copy "segments/$(basename $f)"
+            DURATION=$(ffprobe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "$f" || echo 7)
+            MAX_START=$(awk -v d="$DURATION" 'BEGIN{if(d>7) print d-7; else print 0}')
+            START=$(awk -v max="$MAX_START" 'BEGIN{srand(); print int(rand()*max)}')
+            ffmpeg -y -ss $START -i "$f" -t 5 -c copy "segments/$(basename "$f")"
           done
 
-      - name: concatenate segments
+      - name: Concatenate segments
         run: |
           ls segments/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
           ffmpeg -y -f concat -safe 0 -i segments.txt -c copy output.mp4
 
-      - name: create thumbnail
+      - name: Create thumbnail
+        run: ffmpeg -y -i output.mp4 -ss 00:00:02 -vframes 1 thumb.jpg
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: |
+            output.mp4
+            thumb.jpg
+
+      - name: Optional: Commit & push output (enable manually)
         run: |
-          ffmpeg -i output.mp4 -ss 00:00:05 -vframes 1 thumb.jpg
-
-      - name: upload video
-        uses: actions/upload-artifact@v4
-        with:
-          name: rendered-video
-          path: output.mp4
-
-      - name: upload thumbnail
-        uses: actions/upload-artifact@v4
-        with:
-          name: thumbnail
-          path: thumb.jpg
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add output.mp4 thumb.jpg
+          git commit -m "Add rendered video from workflow" || echo "Nothing to commit"
+          git push origin main || echo "Push failed"
