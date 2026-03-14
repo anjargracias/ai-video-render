@@ -1,4 +1,4 @@
-name: render-video
+name: render-video-strong
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
 jobs:
   render:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - uses: actions/checkout@v4
@@ -23,35 +25,60 @@ jobs:
           sudo apt update
           sudo apt install ffmpeg jq curl wget -y
 
-      - name: download multiple videos
+      - name: download multiple videos (10-15 clips)
         run: |
           mkdir -p clips
           COUNT=0
-          while [ $COUNT -lt 10 ]; do
-            # Coba Pixabay dulu
+          TARGET=$((10 + RANDOM % 6))  # 10-15 video
+          while [ $COUNT -lt $TARGET ]; do
+            # Coba Pixabay
             URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
-            curl -s "$URL" > result.json
-            VIDEO=$(jq -r ".hits[$RANDOM % (.hits|length)].videos.medium.url" result.json)
-            
-            # Kalau ada link
+            curl -s "$URL" > pixabay.json
+            LENGTH=$(jq '.hits | length' pixabay.json)
+            if [ "$LENGTH" -gt 0 ]; then
+              INDEX=$((RANDOM % LENGTH))
+              VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json)
+            fi
+
             if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
               FILE="clips/clip_$COUNT.mp4"
               wget -q "$VIDEO" -O "$FILE"
               COUNT=$((COUNT+1))
+              continue
+            fi
+
+            # fallback Pexels
+            curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
+            "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" > pexels.json
+            VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json)
+            if [ "$VIDEO" != "null" ] && [ "$VIDEO" != "" ]; then
+              FILE="clips/clip_$COUNT.mp4"
+              wget -q "$VIDEO" -O "$FILE"
+              COUNT=$((COUNT+1))
+              continue
+            fi
+
+            # fallback NASA image
+            curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" > nasa.json
+            IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json)
+            if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
+              FILE="clips/clip_$COUNT.mp4"
+              wget -q "$IMG" -O image.jpg
+              ffmpeg -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
+              COUNT=$((COUNT+1))
             fi
           done
 
-      - name: cut random segments
+      - name: cut random segments 5-7s
         run: |
           mkdir -p segments
           for f in clips/*.mp4; do
-            DURATION=$((5 + RANDOM % 3)) # 5-7 detik
+            DURATION=$((5 + RANDOM % 3))
             ffmpeg -y -i "$f" -ss 0 -t $DURATION -c copy "segments/$(basename $f)"
           done
 
       - name: concatenate segments
         run: |
-          # buat file daftar segmen
           ls segments/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
           ffmpeg -y -f concat -safe 0 -i segments.txt -c copy output.mp4
 
