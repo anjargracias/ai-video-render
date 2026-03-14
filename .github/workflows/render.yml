@@ -1,10 +1,10 @@
-name: Render Video Final
+name: Render Multi-Clip Video
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
+    paths:
+      - 'topic.txt'
+  workflow_dispatch:
 
 jobs:
   render:
@@ -14,46 +14,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg wget jq
+
       - name: Set topic
         run: |
           TOPIC=$(cat topic.txt)
           echo "TOPIC=$TOPIC" >> $GITHUB_ENV
           echo "Topic: $TOPIC"
 
-      - name: Install tools
-        run: sudo apt update && sudo apt install -y ffmpeg jq wget curl
-
       - name: Download and process clips
         run: |
           mkdir -p clips
           COUNT=0
           TARGET=$((10 + RANDOM % 6))
+          SAFE_TOPIC=$(echo "$TOPIC" | jq -sRr @uri)
+
           while [ $COUNT -lt $TARGET ]; do
             VIDEO=""
-            # Pixabay API
-            URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
-            curl -s "$URL" -o pixabay.json
-            cat pixabay.json
-            LENGTH=$(jq '.hits | length' pixabay.json 2>/dev/null || echo 0)
 
+            # Pixabay
+            PIXABAY_KEY="52872254-a9cfc454d265a23c8b64db70d"
+            URL="https://pixabay.com/api/videos/?key=$PIXABAY_KEY&q=$SAFE_TOPIC"
+            curl -s "$URL" > pixabay.json
+            cat pixabay.json  # debug
+            LENGTH=$(jq '.hits | length' pixabay.json 2>/dev/null || echo 0)
             if [ "$LENGTH" -gt 0 ]; then
               INDEX=$((RANDOM % LENGTH))
-              VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json 2>/dev/null || echo "")
+              VIDEO=$(jq -r ".hits[$INDEX].videos.medium.url" pixabay.json)
             fi
 
-            # Fallback Pexels API
+            # Fallback Pexels
             if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
               curl -H "Authorization: XNTrlQTmElOSI8Btte8CuNnTjAbeAXmpSmqfo1GHx4gUEDPn4lEBIWYY" \
-                "https://api.pexels.com/videos/search?query=$TOPIC&per_page=1" -o pexels.json
-              cat pexels.json
+                "https://api.pexels.com/videos/search?query=$SAFE_TOPIC&per_page=1" > pexels.json
               VIDEO=$(jq -r '.videos[0].video_files[0].link' pexels.json 2>/dev/null || echo "")
             fi
 
             # Fallback NASA image
             if [ -z "$VIDEO" ] || [ "$VIDEO" == "null" ]; then
-              curl "https://images-api.nasa.gov/search?q=$TOPIC&media_type=image" -o nasa.json
+              curl -s "https://images-api.nasa.gov/search?q=$SAFE_TOPIC&media_type=image" > nasa.json
               IMG=$(jq -r '.collection.items[0].links[0].href' nasa.json 2>/dev/null || echo "")
-              if [ "$IMG" != "null" ] && [ "$IMG" != "" ]; then
+              if [ -n "$IMG" ] && [ "$IMG" != "null" ]; then
                 FILE="clips/clip_$COUNT.mp4"
                 wget -q "$IMG" -O image.jpg
                 ffmpeg -y -loop 1 -i image.jpg -t 7 -vf scale=1280:720 "$FILE"
@@ -81,13 +85,8 @@ jobs:
           ls clips/*.mp4 | sed "s/^/file '/; s/$/'/" > segments.txt
           ffmpeg -f concat -safe 0 -i segments.txt -c copy output.mp4
 
-      - name: Create thumbnail
-        run: ffmpeg -i output.mp4 -ss 00:00:01 -vframes 1 thumb.jpg
-
-      - name: Upload final video & thumbnail
+      - name: Upload video artifact
         uses: actions/upload-artifact@v4
         with:
-          name: final-video
-          path: |
-            output.mp4
-            thumb.jpg
+          name: output-video
+          path: output.mp4
