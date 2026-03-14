@@ -31,7 +31,7 @@ jobs:
           COUNT=0
           TARGET=$((10 + RANDOM % 6))  # 10-15 video
           while [ $COUNT -lt $TARGET ]; do
-            # Coba Pixabay
+            # Pixabay
             URL="https://pixabay.com/api/videos/?key=52872254-a9cfc454d265a23c8b64db70d&q=$TOPIC"
             curl -s "$URL" > pixabay.json
             LENGTH=$(jq '.hits | length' pixabay.json)
