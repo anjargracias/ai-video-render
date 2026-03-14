@@ -1,4 +1,4 @@
-name: render-video-stable
+name: render-video-final
 
 on:
   push:
@@ -74,6 +74,16 @@ jobs:
               fi
             fi
           done
+
+      - name: check clips
+        run: |
+          COUNT=$(ls clips/*.mp4 2>/dev/null | wc -l)
+          if [ "$COUNT" -lt 1 ]; then
+            echo "No clips downloaded. Exiting workflow."
+            exit 0
+          else
+            echo "$COUNT clips downloaded, proceeding..."
+          fi
 
       - name: cut random segments 5-7s
         run: |
